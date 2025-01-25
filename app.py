@@ -90,23 +90,42 @@ def allowed_file(filename):
 def fetch_news(query):
     """Fetch news using a public API like NewsAPI."""
     try:
-        api_key = "8bf838d7d6d444c5a2e451248d3cdf7c"
-        url = f"https://newsapi.org/v2/everything?q={query}&apiKey={api_key}"
-        print(f"Attempting to fetch news from: {url}")  # Log the URL being called
+        api_key = "8bf838d7d6d444c5a2e451248d3cdf7c"  # You should move this to an environment variable
+        url = f"https://newsapi.org/v2/everything?q={query}&apiKey={api_key}&pageSize=10"  # Limit results and add error handling
+        print(f"Attempting to fetch news from: {url}")
         
         response = requests.get(url)
-        print(f"API Response Status Code: {response.status_code}")  # Log the response status
+        print(f"API Response Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"API Error Response: {response.text}")  # Log error response
-            return []
+            print(f"API Error Response: {response.text}")
+            if response.status_code == 401:
+                raise Exception("Invalid API key. Please check your NewsAPI credentials.")
+            elif response.status_code == 429:
+                raise Exception("Too many requests. Please try again later.")
+            else:
+                raise Exception(f"NewsAPI error: {response.text}")
             
         news_data = response.json()
-        print(f"Received {len(news_data.get('articles', []))} articles")  # Log number of articles
-        return news_data.get("articles", [])
+        if news_data.get("status") != "ok":
+            raise Exception(f"API returned error status: {news_data.get('message', 'Unknown error')}")
+            
+        articles = news_data.get("articles", [])
+        print(f"Received {len(articles)} articles")
+        
+        # Filter out articles with missing required fields
+        valid_articles = [
+            article for article in articles 
+            if article.get("title") and article.get("description") and article.get("url")
+        ]
+        
+        return valid_articles
+    except requests.exceptions.RequestException as e:
+        print(f"Network error in fetch_news: {str(e)}")
+        raise Exception("Failed to connect to news service. Please check your internet connection.")
     except Exception as e:
-        print(f"Exception in fetch_news: {str(e)}")  # Log any exceptions
-        return []
+        print(f"Exception in fetch_news: {str(e)}")
+        raise
 
 def save_feedback():
     """Save feedback data to the feedback JSON file."""
@@ -169,11 +188,17 @@ def index():
     articles = []
     related_uploads = []
     error_message = None
+    search_performed = False  # Add this flag
     
     if request.method == "POST":
         try:
-            query = request.form.get("query")
-            print(f"Received search query: {query}")  # Log the search query
+            query = request.form.get("query", "").strip()
+            if not query:
+                error_message = "Please enter a search query"
+                return render_template("index.html", articles=[], uploads=[], error_message=error_message, search_performed=False)
+            
+            print(f"Received search query: {query}")
+            search_performed = True  # Set the flag when search is performed
             
             # Check if the query is a URL
             if is_valid_url(query):
@@ -181,6 +206,8 @@ def index():
                 url_content = fetch_url_content(query)
                 if url_content:
                     articles = [url_content]
+                else:
+                    error_message = "Could not fetch content from the provided URL"
             else:
                 print("Processing as news search")
                 articles = fetch_news(query)
@@ -211,9 +238,13 @@ def index():
         
         except Exception as e:
             print(f"Error in index route: {str(e)}")
-            error_message = f"An error occurred: {str(e)}"
+            error_message = str(e)
             
-    return render_template("index.html", articles=articles, uploads=related_uploads, error_message=error_message)
+    return render_template("index.html", 
+                         articles=articles, 
+                         uploads=related_uploads, 
+                         error_message=error_message,
+                         search_performed=search_performed)  # Pass the flag to template
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
